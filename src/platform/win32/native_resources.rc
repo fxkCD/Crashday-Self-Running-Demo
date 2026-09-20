@@ -1,0 +1,36 @@
+#include <windows.h>
+
+LANGUAGE LANG_GERMAN, SUBLANG_GERMAN
+
+112 ICON "resources/flydemo.ico"
+104 BITMAP "resources/day.bmp"
+105 BITMAP "resources/evening.bmp"
+106 BITMAP "resources/night.bmp"
+113 BITMAP "resources/startup_logo.bmp"
+
+101 DIALOG 0, 0, 180, 117
+STYLE 0x80C80AC0
+CAPTION "Crashday FlyAround Demo"
+FONT 8, "MS Sans Serif"
+BEGIN
+    CONTROL "Please choose one of the following times of day you want the demo to run in.", -1, "Static", 0x50020000, 13, 7, 150, 21
+    CONTROL 104, -1, "Static", 0x5000100E, 116, 38, 35, 32
+    CONTROL "evening", 1000, "Button", 0x50020009, 66, 71, 43, 16
+    CONTROL 105, -1, "Static", 0x5000100E, 67, 38, 35, 32
+    CONTROL "night", 1001, "Button", 0x50020009, 115, 71, 35, 16
+    CONTROL 106, -1, "Static", 0x5000100E, 19, 38, 35, 32
+    CONTROL "day", 1002, "Button", 0x50020009, 19, 71, 36, 16
+    CONTROL "Run the demo!", 1003, "Button", 0x50010001, 101, 95, 65, 16
+END
+
+107 DIALOGEX 0, 0, 186, 111
+STYLE 0x80C80AC0
+CAPTION "Crashday FlyAround Demo"
+FONT 8, "MS Sans Serif", 0, 0, 1
+BEGIN
+    CONTROL "Continue", 1007, "Button", 0x50010001, 127, 87, 50, 14
+    CONTROL "Crashday is still in alpha development so there may probably be some bugs or errors.", -1, "Static", 0x50020000, 10, 10, 173, 19, 0x20
+    CONTROL "We would be glad if you report bugs, errors or questions at our message forum at:", -1, "Static", 0x50020000, 10, 34, 173, 19, 0x20
+    CONTROL "\251 Moon Byte Studios. April, 2001", -1, "Static", 0x50020002, 5, 89, 107, 8
+    CONTROL 113, -1, "Static", 0x5000100E, 38, 61, 101, 11
+END
