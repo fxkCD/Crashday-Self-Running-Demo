@@ -108,7 +108,11 @@ public:
 class WorldState : public WorldQuery {
 public:
 
-    static constexpr std::size_t MaxDynamics = 0x1FF;
+    
+    
+    
+    static constexpr std::size_t MaxDynamics = 0x200;
+    static constexpr std::size_t MaxStaticObjectsPerSector = 0x24;
 
     std::array<CD3DOBJECT*, MaxDynamics>& Dynamics() { return dynamics_; }
     const std::array<CD3DOBJECT*, MaxDynamics>& Dynamics() const { return dynamics_; }
