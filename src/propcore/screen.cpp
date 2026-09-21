@@ -113,8 +113,14 @@ bool ScreenState::Screenshot(std::int32_t width,
 
     std::array<std::uint8_t, 54> header{};
     const std::string templateName = templateFile.string();
-    if (files.Open(templateName.c_str(), "r+", 0) != 0)
-        return fail("scrnshot.bmt could not be opened");
+    if (files.Open(templateName.c_str(), "r+", 0) != 0) {
+        if (error) {
+            const std::string fileName = templateFile.filename().string();
+            *error = "Screenshot template file '" + fileName +
+                     "' (/textures/) could not be found.";
+        }
+        return false;
+    }
     (void)files.Read(header.data(), 1, header.size());
     (void)files.Close();
 

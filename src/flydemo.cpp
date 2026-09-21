@@ -530,6 +530,8 @@ static std::string RuntimeError;
 static std::uint16_t FlyCycle = 0;
 static float FlyTime = 0.0f;
 static float RenderRange = 400.0f;
+static bool FlySceneControllerReady = false;
+static bool FlySceneWorldReady = false;
 
 static bool InitFlyScene(const std::filesystem::path& gameRoot,
                                  std::string selectedAmbience,
@@ -547,14 +549,31 @@ static bool InitFlyScene(const std::filesystem::path& gameRoot,
     RenderRange = options.range;
     RuntimeError.clear();
 
-    LifecycleLog("Create empty world... Create world sectors - SizeX:960 SizeZ:960...");
-    LifecycleLog("85 sectors needed");
-    LifecycleLog("85 sectors with 36 StaticObject pointers per sectors prepared");
-    LifecycleLog("512 DynamicObject pointers prepared");
+    
+    
+    
+    CollisionWorld = WorldState{};
+    CollisionObjects.clear();
+    CollisionWorld.Sectors().resize(1);
+    CollisionWorld.Sectors().front().staticObjects.reserve(
+        WorldState::MaxStaticObjectsPerSector);
+    FlySceneWorldReady = true;
+
+    LifecycleLog("Create empty world...");
+    LifecycleLog("Create world sectors...");
+    LifecycleLog(std::to_string(CollisionWorld.Sectors().size()) +
+                 " sectors needed");
+    LifecycleLog(std::to_string(CollisionWorld.Sectors().size()) +
+                 " sectors with " +
+                 std::to_string(CollisionWorld.Sectors().front().staticObjects.capacity()) +
+                 " StaticObject pointers per sectors prepared");
+    LifecycleLog(std::to_string(CollisionWorld.Dynamics().size()) +
+                 " DynamicObject pointers prepared");
     LifecycleLog("World initialised");
     LifecycleLog("");
 
     LifecycleLog("Startup CamFlightController...");
+    FlySceneControllerReady = true;
     LifecycleLog("Load path file...");
     const std::filesystem::path cameraPath = GameRoot /
         std::string(kCameraPath);
@@ -578,8 +597,6 @@ static bool InitFlyScene(const std::filesystem::path& gameRoot,
             CBMManager::CanonicalName(it->path().extension().string()) == ".amb")
             ++ambienceCount;
     }
-    if (ambienceCount == 0)
-        ambienceCount = 1;
     LifecycleLog("AmbienceSystem created: " + std::to_string(ambienceCount) +
                  " times of day available");
     LifecycleLog("");
@@ -686,12 +703,10 @@ static bool InitFlyScene(const std::filesystem::path& gameRoot,
     if (!BuildTrackDrops(Track, dropPlans, &parseError))
         return SceneFail(error, "demo.trk: " + parseError);
 
-    CollisionWorld = WorldState{};
-    CollisionObjects.clear();
-    CollisionWorld.Sectors().resize(1);
     SECTOR& collisionRoot = CollisionWorld.Sectors()[0];
     CollisionObjects.reserve(FieldObjPtr.size());
-    collisionRoot.staticObjects.reserve(FieldObjPtr.size());
+    if (FieldObjPtr.size() > collisionRoot.staticObjects.capacity())
+        collisionRoot.staticObjects.reserve(FieldObjPtr.size());
     for (const CD3DPOLYGONOBJECT& field : FieldObjPtr) {
         auto proxy = std::make_unique<FieldCollisionProxy>(field);
         collisionRoot.staticObjects.push_back(proxy.get());
@@ -835,29 +850,46 @@ static bool RenderFlyFrame(std::int32_t screenWidth,
 }
 
 static void CloseFlyScene() {
-    const bool hadController = FlyCtrl.GetNumFrames() != 0;
-    const bool hadWorld = hadController || !CollisionObjects.empty() ||
-                          !DropObjPtr.empty() || !FieldObjPtr.empty();
-
-    if (hadController) {
+    
+    
+    
+    if (FlySceneControllerReady) {
+        FlyCtrl = CamFlightController{};
+        FlySceneControllerReady = false;
         LifecycleLog("CamFlightController shut down");
         LifecycleLog("");
     }
 
-    FlyCtrl = CamFlightController{};
     ShutdownCars();
+    CDWorld = nullptr;
 
-    if (hadWorld) {
+    if (FlySceneWorldReady) {
         LifecycleLog("World is deleted...");
         LifecycleLog("Remove all static objects from world...");
+
+        for (SECTOR& sector : CollisionWorld.Sectors())
+            sector.staticObjects.clear();
+        CollisionObjects.clear();
+
         LifecycleLog("Remove all dynamic objects from world...");
+        CollisionWorld.Dynamics().fill(nullptr);
+        CollisionWorld = WorldState{};
+        FlySceneWorldReady = false;
         LifecycleLog("");
+    } else {
+        CollisionObjects.clear();
+        CollisionWorld = WorldState{};
     }
 
-    CollisionObjects.clear();
-    CollisionWorld = WorldState{};
     DropObjPtr.clear();
     FieldObjPtr.clear();
+    Track = TrackFileData{};
+    Environment = EngineEnvironment{};
+    SkyTextures = {};
+    Lighting = {};
+    GameRoot.clear();
+    FlyCycle = 0;
+    FlyTime = 0.0f;
     RuntimeError.clear();
 }
 
@@ -2622,27 +2654,46 @@ struct DirectInputFormats {
     DirectInputFormats() {
         for (DWORD i = 0; i < keyboardObjects.size(); ++i) {
             keyboardObjects[i] = DIOBJECTDATAFORMAT{
-                &GUID_Key, i, static_cast<DWORD>(DIDFT_BUTTON | DIDFT_MAKEINSTANCE(i)), 0};
+                &GUID_Key,
+                i,
+                static_cast<DWORD>(DIDFT_BUTTON | DIDFT_MAKEINSTANCE(i) | 0x80000000UL),
+                0};
         }
         keyboard = DIDATAFORMAT{
-            sizeof(DIDATAFORMAT), sizeof(DIOBJECTDATAFORMAT), 0,
-            sizeof(std::uint8_t) * 256u,
-            static_cast<DWORD>(keyboardObjects.size()), keyboardObjects.data()};
+            sizeof(DIDATAFORMAT),
+            sizeof(DIOBJECTDATAFORMAT),
+            DIDF_RELAXIS,
+            256u,
+            static_cast<DWORD>(keyboardObjects.size()),
+            keyboardObjects.data()};
 
-        mouseObjects[0] = DIOBJECTDATAFORMAT{&GUID_XAxis, DIMOFS_X,
-            static_cast<DWORD>(DIDFT_RELAXIS | DIDFT_MAKEINSTANCE(0)), 0};
-        mouseObjects[1] = DIOBJECTDATAFORMAT{&GUID_YAxis, DIMOFS_Y,
-            static_cast<DWORD>(DIDFT_RELAXIS | DIDFT_MAKEINSTANCE(1)), 0};
-        mouseObjects[2] = DIOBJECTDATAFORMAT{&GUID_ZAxis, DIMOFS_Z,
-            static_cast<DWORD>(DIDFT_RELAXIS | DIDFT_MAKEINSTANCE(2)), 0};
-        for (DWORD i = 0; i < 4; ++i) {
-            mouseObjects[3 + i] = DIOBJECTDATAFORMAT{
-                &GUID_Button, DIMOFS_BUTTON0 + i,
-                static_cast<DWORD>(DIDFT_BUTTON | DIDFT_MAKEINSTANCE(i)), 0};
-        }
+        mouseObjects[0] = DIOBJECTDATAFORMAT{
+            &GUID_XAxis, DIMOFS_X,
+            static_cast<DWORD>(DIDFT_AXIS | DIDFT_ANYINSTANCE), 0};
+        mouseObjects[1] = DIOBJECTDATAFORMAT{
+            &GUID_YAxis, DIMOFS_Y,
+            static_cast<DWORD>(DIDFT_AXIS | DIDFT_ANYINSTANCE), 0};
+        mouseObjects[2] = DIOBJECTDATAFORMAT{
+            &GUID_ZAxis, DIMOFS_Z,
+            static_cast<DWORD>(DIDFT_AXIS | DIDFT_ANYINSTANCE | 0x80000000UL), 0};
+        mouseObjects[3] = DIOBJECTDATAFORMAT{
+            nullptr, DIMOFS_BUTTON0,
+            static_cast<DWORD>(DIDFT_BUTTON | DIDFT_ANYINSTANCE), 0};
+        mouseObjects[4] = DIOBJECTDATAFORMAT{
+            nullptr, DIMOFS_BUTTON1,
+            static_cast<DWORD>(DIDFT_BUTTON | DIDFT_ANYINSTANCE), 0};
+        mouseObjects[5] = DIOBJECTDATAFORMAT{
+            nullptr, DIMOFS_BUTTON2,
+            static_cast<DWORD>(DIDFT_BUTTON | DIDFT_ANYINSTANCE | 0x80000000UL), 0};
+        mouseObjects[6] = DIOBJECTDATAFORMAT{
+            nullptr, DIMOFS_BUTTON3,
+            static_cast<DWORD>(DIDFT_BUTTON | DIDFT_ANYINSTANCE | 0x80000000UL), 0};
         mouse = DIDATAFORMAT{
-            sizeof(DIDATAFORMAT), sizeof(DIOBJECTDATAFORMAT), DIDF_RELAXIS,
-            sizeof(DIMOUSESTATE), static_cast<DWORD>(mouseObjects.size()),
+            sizeof(DIDATAFORMAT),
+            sizeof(DIOBJECTDATAFORMAT),
+            DIDF_RELAXIS,
+            sizeof(DIMOUSESTATE),
+            static_cast<DWORD>(mouseObjects.size()),
             mouseObjects.data()};
 
         const GUID* const axisGuids[8] = {
@@ -2655,22 +2706,31 @@ struct DirectInputFormats {
             DIJOFS_SLIDER(0), DIJOFS_SLIDER(1)};
         for (DWORD i = 0; i < 8; ++i) {
             joystickObjects[i] = DIOBJECTDATAFORMAT{
-                axisGuids[i], axisOffsets[i],
-                static_cast<DWORD>(DIDFT_ABSAXIS | DIDFT_MAKEINSTANCE(i)), 0};
+                axisGuids[i],
+                axisOffsets[i],
+                static_cast<DWORD>(DIDFT_AXIS | DIDFT_ANYINSTANCE | 0x80000000UL),
+                0x00000100u};
         }
         for (DWORD i = 0; i < 4; ++i) {
             joystickObjects[8 + i] = DIOBJECTDATAFORMAT{
-                &GUID_POV, DIJOFS_POV(i),
-                static_cast<DWORD>(DIDFT_POV | DIDFT_MAKEINSTANCE(i)), 0};
+                &GUID_POV,
+                DIJOFS_POV(i),
+                static_cast<DWORD>(DIDFT_POV | DIDFT_ANYINSTANCE | 0x80000000UL),
+                0};
         }
         for (DWORD i = 0; i < 32; ++i) {
             joystickObjects[12 + i] = DIOBJECTDATAFORMAT{
-                &GUID_Button, DIJOFS_BUTTON(i),
-                static_cast<DWORD>(DIDFT_BUTTON | DIDFT_MAKEINSTANCE(i)), 0};
+                nullptr,
+                DIJOFS_BUTTON(i),
+                static_cast<DWORD>(DIDFT_BUTTON | DIDFT_ANYINSTANCE | 0x80000000UL),
+                0};
         }
         joystick = DIDATAFORMAT{
-            sizeof(DIDATAFORMAT), sizeof(DIOBJECTDATAFORMAT), DIDF_ABSAXIS,
-            sizeof(DIJOYSTATE), static_cast<DWORD>(joystickObjects.size()),
+            sizeof(DIDATAFORMAT),
+            sizeof(DIOBJECTDATAFORMAT),
+            DIDF_ABSAXIS,
+            sizeof(DIJOYSTATE),
+            static_cast<DWORD>(joystickObjects.size()),
             joystickObjects.data()};
     }
 };
@@ -3558,7 +3618,6 @@ constexpr WORD StartupContinue = 1007u;
 HINSTANCE gInstance = nullptr;
 HWND gMainWindow = nullptr;
 bool gStartupAborted = false;
-bool gEscapePressed = false;
 bool gCursorHidden = false;
 const char* SelectedAmbience = "evening.amb";
 bool DayChecked = false;
@@ -3654,9 +3713,6 @@ LRESULT CALLBACK FlyWndProc(HWND hwnd, UINT message,
 
     if (message == WM_DESTROY)
         PostQuitMessage(0);
-
-    if (message == WM_KEYDOWN && wParam == VK_ESCAPE)
-        gEscapePressed = true;
     return DefWindowProcA(hwnd, message, wParam, lParam);
 }
 
@@ -3836,6 +3892,100 @@ void ShowFileNotFound(const std::string& file) {
     ShowOriginalError("The file was not found.");
 }
 
+bool CaptureScreenshotLikeExe(ScreenState& screen,
+                              const DirectXState& directx,
+                              Win32Graphics& native,
+                              const std::filesystem::path& dataRoot) {
+    const VideoMode* mode = directx.CurrentMode();
+    if (!mode) {
+        WriteLog("Screenshot failed: no active display mode");
+        return false;
+    }
+
+    CDFileOperations screenshotFiles;
+    std::filesystem::path writtenPath;
+    std::string screenshotError;
+    const bool written = screen.Screenshot(
+        static_cast<std::int32_t>(mode->width),
+        static_cast<std::int32_t>(mode->height),
+        dataRoot / "TEXTURES" / "scrnshot.bmt",
+        dataRoot, native, screenshotFiles, &writtenPath, &screenshotError);
+
+    if (written) {
+        WriteLog("Screenshot written to '" +
+                 writtenPath.filename().string() + "'");
+        return true;
+    }
+
+    if (screenshotError.empty())
+        screenshotError = "Unknown screenshot error.";
+    WriteLog(screenshotError);
+    ShowOriginalError("Engine-Fehler!", screenshotError.c_str());
+    return false;
+}
+
+void ShutdownControllerLikeExe(void* controller,
+                               ControllerDeviceState& devices,
+                               ControlInput& input) {
+    const bool hadInput = devices.DInputObj;
+    const bool hadKeyboard = devices.DIKeyb;
+    const bool hadMouse = devices.DIMouse;
+    const bool hadJoystick = devices.DIJoystick;
+
+    if (hadInput)
+        WriteLog("Shut down DirectInput...");
+
+    Controller_Shutdown(controller, devices, input);
+
+    if (hadKeyboard && !devices.DIKeyb)
+        WriteLog("Keyboard released");
+    if (hadMouse && !devices.DIMouse)
+        WriteLog("Mouse released");
+    if (hadJoystick && !devices.DIJoystick)
+        WriteLog("Joystick released");
+    if (hadInput && !devices.DInputObj)
+        WriteLog("DirectInput object deleted");
+    if (hadInput)
+        WriteLog("DirectInput shut down");
+
+    WriteLog("ControllerInterface shut down");
+    WriteLog("");
+}
+
+void ShutdownPropsFxLikeExe(CBMManager& textures,
+                            DirectXState& directx,
+                            Win32Graphics& native) {
+    const bool hadDirect3D = directx.Direct3DReady() || directx.DeviceReady() ||
+                             directx.ViewportReady() || directx.FrontBufferReady() ||
+                             directx.BackBufferReady();
+    const bool hadBuffers = directx.FrontBufferReady() || directx.BackBufferReady();
+    const bool hadDirectDraw = directx.DirectDrawReady();
+
+    WriteLog("Shut down PropsFX-Engine...");
+    WriteLog("Shut down DirectX...");
+    textures.DeleteAll();
+
+    if (hadDirect3D) {
+        WriteLog("Shut down Direct3D...");
+        if (hadBuffers)
+            WriteLog("Delete all buffers...");
+        directx.ShutdownDirect3D(native);
+    }
+    if (hadDirectDraw) {
+        WriteLog("Shut down DirectDraw...");
+        directx.ShutdownDirectDraw(native);
+        if (gCursorHidden) {
+            ShowCursor(TRUE);
+            gCursorHidden = false;
+        }
+    }
+
+    WriteLog("DirectX shut down");
+    WriteLog("");
+    WriteLog("PropsFX-Engine shut down");
+    WriteLog("");
+}
+
 std::filesystem::path ExecutableDirectory() {
     std::array<char, 0x208> buffer{};
     const DWORD n = GetModuleFileNameA(nullptr, buffer.data(),
@@ -3900,33 +4050,25 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
     if (startupResult == -1) {
         WriteLog("DialogBoxParamA startup resources failed");
         ShowOriginalError("!!! Fatal error !!!");
-        DestroyWindow(hwnd);
-        UnregisterClassA(wc.lpszClassName, instance);
         return 3;
     }
     if (gStartupAborted || !RunRequested) {
-        DestroyWindow(hwnd);
-        UnregisterClassA(wc.lpszClassName, instance);
         return 0;
     }
 
     const std::filesystem::path dataRoot = ExecutableDirectory();
     WriteLog("Create CrashdayDirectory object...");
     WriteLog("Use parameter string for game directory...");
-    CrashdayDirectory gameDirectory(dataRoot);
-    if (!gameDirectory.Exists()) {
+    auto gameDirectory = std::make_unique<CrashdayDirectory>(dataRoot);
+    if (!gameDirectory->Exists()) {
         WriteLog("Given path string: The game directory doesn't exist!");
         ShowOriginalFatal("Given path string: The game directory doesn't exist!");
-        DestroyWindow(hwnd);
-        UnregisterClassA(wc.lpszClassName, instance);
         return 4;
     }
     WriteLog("Crashday directory: " + GameDirectoryForLog(dataRoot));
     WriteLog("");
 
     WriteLog("Create ControllerInterface...");
-    WriteLog("Load names for input keys...");
-    WriteLog("Load names for game events...");
     WriteLog("Starting DirectInput...");
     std::array<std::uint8_t, control_off::ObjectStateSpan> controllerImage{};
     ControllerDeviceState controllerDevices{};
@@ -3946,13 +4088,16 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
     } else {
         WriteLog("No joystick found.");
     }
-    if (directInputStarted)
+    if (directInputStarted) {
         WriteLog("DirectInput initialised");
-    WriteLog("Load control settings...");
+    } else {
+        WriteLog("DirectInput initialisation failed");
+    }
     WriteLog(controllerImage[control_off::JoystickActive] != 0
                  ? "Joystick support activated"
                  : "Joystick support deactivated");
-    WriteLog("ControllerInterface initialised");
+    if (directInputStarted)
+        WriteLog("ControllerInterface initialised");
     WriteLog("");
 
     WriteLog("Initialise PropsFX-Engine...");
@@ -3969,7 +4114,6 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         ShowPropsFxError("You system doesn't contain a suitable graphics card which is needed for the program!");
         if (controllerDevices.DInputObj)
             Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-        DestroyWindow(hwnd);
         return 4;
     }
     LogGraphicsDrivers(directx);
@@ -3987,14 +4131,13 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
     EngineSettings graphicsSettings;
     CDFileOperations settingsFile;
     const EngineSettings::LoadResult settingsResult = graphicsSettings.Load(
-        0, gameDirectory, settingsFile, directx, options);
+        0, *gameDirectory, settingsFile, directx, options);
     if (settingsResult == EngineSettings::LoadResult::Missing) {
         WriteLog("Load engine settings... -> propsfx.cfg couldn't be found!");
         ShowOriginalError("Error in PropsFX-Engine!",
                           "The engine needs graphics settings to be set.\r\nPlease run the 3D-Setup.");
         if (controllerDevices.DInputObj)
             Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-        DestroyWindow(hwnd);
         return 5;
     }
     if (settingsResult == EngineSettings::LoadResult::OpenFailed) {
@@ -4003,7 +4146,6 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
                           "The engine needs video mode settings to be set.\r\nPlease start the 3D-Setup.");
         if (controllerDevices.DInputObj)
             Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-        DestroyWindow(hwnd);
         return 5;
     }
 
@@ -4024,7 +4166,6 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
                           "The creation of a DirectDraw object for the selected display driver failed.\r\n(Should theoretically not happen)");
         if (controllerDevices.DInputObj)
             Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-        DestroyWindow(hwnd);
         return 6;
     }
 
@@ -4046,7 +4187,6 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         directx.Shutdown(native);
         if (controllerDevices.DInputObj)
             Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-        DestroyWindow(hwnd);
         return 7;
     }
 
@@ -4061,7 +4201,6 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         directx.Shutdown(native);
         if (controllerDevices.DInputObj)
             Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-        DestroyWindow(hwnd);
         return 8;
     }
     WriteLog("D3D-renderer with hardware support created");
@@ -4070,10 +4209,14 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
     if (selectedDriver) {
         const std::uint32_t opaqueBits = selectedDriver->opaqueTextureFormat.rgbBitCount;
         const std::uint32_t alphaBits = selectedDriver->alphaTextureFormat.rgbBitCount;
-        WriteLog("Search for a nonalpha-texture format... 555 565 888 -> Use " +
-                 std::to_string(opaqueBits) + "bit format!");
-        WriteLog("Search for alpha-texture format... 1555 4444 8888 -> Use " +
-                 std::to_string(alphaBits) + "bit format!");
+        WriteLog(opaqueBits != 0
+                     ? "Search for a nonalpha-texture format... 555 565 888 -> Use " +
+                           std::to_string(opaqueBits) + "bit format!"
+                     : "Search for a nonalpha-texture format... none found!");
+        WriteLog(alphaBits != 0
+                     ? "Search for alpha-texture format... 1555 4444 8888 -> Use " +
+                           std::to_string(alphaBits) + "bit format!"
+                     : "Search for alpha-texture format... none found!");
     }
 
     WriteLog("Set screen format tonormal...");
@@ -4082,7 +4225,6 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         directx.Shutdown(native);
         if (controllerDevices.DInputObj)
             Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-        DestroyWindow(hwnd);
         return 8;
     }
     WriteLog("Create viewport...");
@@ -4102,7 +4244,6 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         directx.Shutdown(native);
         if (controllerDevices.DInputObj)
             Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-        DestroyWindow(hwnd);
         return 8;
     }
     WriteLog("");
@@ -4132,22 +4273,20 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         directx.Shutdown(native);
         if (controllerDevices.DInputObj)
             Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-        DestroyWindow(hwnd);
         return 9;
     }
 
-    (void)gameDirectory.ChangeTo(std::string(kSoundsDirectory));
+    (void)gameDirectory->ChangeTo(std::string(kSoundsDirectory));
     const std::string musicPath = std::string(kDemoMusic);
     (void)PlaySoundA(musicPath.c_str(), nullptr,
                      SND_FILENAME | SND_ASYNC | SND_LOOP);
 
-    Win32Timer timer;
+    auto timer = std::make_unique<Win32Timer>();
     EngineTiming engineTiming;
-    engineTiming.ResetFrameTimer(timer);
+    engineTiming.ResetFrameTimer(*timer);
 
     MSG message{};
     bool running = true;
-    bool teardownFramePresented = false;
     while (running) {
         while (PeekMessageA(&message, nullptr, 0, 0, PM_REMOVE)) {
             if (message.message == WM_QUIT) {
@@ -4160,28 +4299,13 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         if (!running)
             break;
 
-        bool escapeRequested = false;
         if (controllerDevices.DInputObj) {
             Controller_Update(controllerImage.data(), controllerDevices, input);
-            if (controllerDevices.DIKeyb &&
-                Controller_GetCode(controllerImage.data()) == 1)
-                escapeRequested = true;
-
-            if (!escapeRequested &&
-                Controller_GetCode(controllerImage.data()) == 0x3F) {
-                if (const VideoMode* mode = directx.CurrentMode()) {
-                    CDFileOperations screenshotFiles;
-                    std::filesystem::path writtenPath;
-                    std::string screenshotError;
-                    (void)screen.Screenshot(mode->width, mode->height,
-                                            (dataRoot / "scrnshot.bmt").string(),
-                                            dataRoot, native, screenshotFiles,
-                                            &writtenPath, &screenshotError);
-                }
-            }
+            if (Controller_GetCode(controllerImage.data()) == 1)
+                break;
+            if (Controller_GetCode(controllerImage.data()) == 0x3F)
+                (void)CaptureScreenshotLikeExe(screen, directx, native, dataRoot);
         }
-        if (gEscapePressed)
-            escapeRequested = true;
 
         const VideoMode* mode = directx.CurrentMode();
         if (!mode) {
@@ -4198,19 +4322,6 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         if (!depthCleared) {
             ShowOriginalFatal("Error in PropsFX-Engine\nClearZBuf() failed!",
                               "..\\propcore\\screen.cpp", 93);
-            break;
-        }
-
-        if (escapeRequested) {
-            CloseFlyScene();
-            sceneError.clear();
-            if (RenderFlyWorld(mode->width, mode->height, renderer, native,
-                               &sceneError)) {
-                (void)renderer.EndScene(native);
-                teardownFramePresented = screen.Present(native);
-            } else if (renderer.SceneInProgress()) {
-                (void)renderer.EndScene(native);
-            }
             break;
         }
 
@@ -4236,56 +4347,25 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         if (!FinishFlyFrame(mode->width, mode->height, textures, textureLoader,
                             renderer, native, &sceneError))
             break;
-        (void)engineTiming.EndFrame(timer, false);
+        (void)engineTiming.EndFrame(*timer, false);
         if (!screen.Present(native)) {
             ShowPropsFxError(nullptr);
             break;
         }
     }
 
-    (void)gameDirectory.ChangeTo(std::string(kSoundsDirectory));
+    (void)gameDirectory->ChangeTo(std::string(kSoundsDirectory));
     (void)PlaySoundA(nullptr, nullptr, SND_FILENAME);
 
     CloseFlyScene();
 
-    WriteLog("Shut down PropsFX-Engine...");
-    WriteLog("Shut down DirectX...");
-    textures.DeleteAll();
-    if (teardownFramePresented && IsWindow(hwnd))
-        ShowWindow(hwnd, SW_HIDE);
+    ShutdownPropsFxLikeExe(textures, directx, native);
+    timer.reset();
+    ShutdownControllerLikeExe(controllerImage.data(), controllerDevices, input);
 
-    WriteLog("Shut down Direct3D...");
-    WriteLog("Delete all buffers...");
-    directx.ShutdownDirect3D(native);
-    WriteLog("Shut down DirectDraw...");
-    directx.ShutdownDirectDraw(native);
-    WriteLog("DirectX shut down");
-    WriteLog("");
-    WriteLog("PropsFX-Engine shut down");
-    WriteLog("");
-
-    WriteLog("Shut down DirectInput...");
-    if (controllerDevices.DIKeyb)
-        WriteLog("Keyboard released");
-    if (controllerDevices.DIMouse)
-        WriteLog("Mouse released");
-    if (controllerDevices.DIJoystick)
-        WriteLog("Joystick released");
-    if (controllerDevices.DInputObj) {
-        WriteLog("DirectInput object deleted");
-        Controller_Shutdown(controllerImage.data(), controllerDevices, input);
-    }
-    WriteLog("DirectInput shut down");
-    WriteLog("ControllerInterface shut down");
-    WriteLog("");
-
+    gameDirectory.reset();
     WriteLog("CrashdayDirectory object deleted");
-
-    if (gCursorHidden) {
-        ShowCursor(TRUE);
-        gCursorHidden = false;
-    }
     LifecycleSink = nullptr;
-    return 0;
+    return 1;
 }
 #endif

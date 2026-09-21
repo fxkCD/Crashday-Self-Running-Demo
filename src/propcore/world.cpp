@@ -234,7 +234,7 @@ WorldEditResult WorldState::MakeObjectStatic(CD3DOBJECT* object,
 
     SECTOR& sector = sectors_[static_cast<std::size_t>(sectorIndex)];
 
-    if (sector.staticObjects.size() >= 0x24u) {
+    if (sector.staticObjects.size() >= MaxStaticObjectsPerSector) {
         result.diagnostics |= World_SectorFull;
         return result;
     }
